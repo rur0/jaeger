@@ -261,10 +261,6 @@ build-ingester:
 .PHONY: docker
 docker: build-ui build-binaries-linux docker-images-only
 
-.PHONY: build-binaries-linux
-build-binaries-linux:
-	GOOS=linux GOARCH=amd64 $(MAKE) build-platform-binaries
-
 .PHONY: build-binaries-windows
 build-binaries-windows:
 	GOOS=windows GOARCH=amd64 $(MAKE) build-platform-binaries
@@ -273,13 +269,11 @@ build-binaries-windows:
 build-binaries-darwin:
 	GOOS=darwin GOARCH=amd64 $(MAKE) build-platform-binaries
 
-.PHONY: build-binaries-s390x
-build-binaries-s390x:
-	GOOS=linux GOARCH=s390x $(MAKE) build-platform-binaries
+LINUX_ARCHS = amd64 arm64 s390x 
 
-.PHONY: build-binaries-arm64
-build-binaries-arm64:
-	GOOS=linux GOARCH=arm64 $(MAKE) build-platform-binaries
+build-binaries-linux: $(addprefix build-binary-linux-, ${LINUX_ARCHS})
+build-binary-linux-%:
+	GOOS=linux GOARCH=$* $(MAKE) build-platform-binaries
 
 .PHONY: build-platform-binaries
 build-platform-binaries: build-agent build-collector build-query build-ingester build-all-in-one build-examples build-tracegen build-otel-collector build-otel-agent build-otel-ingester build-otel-all-in-one
@@ -327,6 +321,24 @@ docker-push:
 	for component in agent cassandra-schema es-index-cleaner es-rollover collector query ingester example-hotrod tracegen; do \
 		docker push $(DOCKER_NAMESPACE)/jaeger-$$component ; \
 	done
+
+INSECURE_DOCKER_MANIFEST ?= 0
+
+docker-manifests: $(addprefix docker-manifest-, ${COMPONENTS})
+docker-manifest-%:
+	docker manifest create --amend \
+		$(shell if [ "$(INSECURE_DOCKER_MANIFEST)" = "1" ]; then echo "--insecure"; fi) \
+		$(DOCKER_NAMESPACE)/jaeger-$* \
+		$(shell for ARCH in $(LINUX_ARCHS); do \
+				echo $(DOCKER_NAMESPACE)/$*-$$ARCH; \
+			done)
+	
+	for ARCH in $(ARCHS); do \
+		docker manifest annotate $(DOCKER_NAMESPACE)/$* $(DOCKER_NAMESPACE)/$*-$$ARCH --arch $$ARCH ; \
+	done
+
+	docker manifest push $(shell if [ "$(INSECURE_DOCKER_MANIFEST)" = "1" ]; then echo "--insecure"; fi) --purge \
+		$(DOCKER_NAMESPACE)/$*
 
 .PHONY: build-crossdock-linux
 build-crossdock-linux:
