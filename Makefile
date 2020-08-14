@@ -65,7 +65,8 @@ JAEGER_DOCKER_PROTOBUF=jaegertracing/protobuf:0.1.0
 COLOR_PASS=$(shell printf "\033[32mPASS\033[0m")
 COLOR_FAIL=$(shell printf "\033[31mFAIL\033[0m")
 COLORIZE=$(SED) ''/PASS/s//$(COLOR_PASS)/'' | $(SED) ''/FAIL/s//$(COLOR_FAIL)/''
-DOCKER_NAMESPACE?=jaegertracing
+DOCKER_NAMESPACE?=localhost:5000/jaegertracing
+#DOCKER_NAMESPACE?=jaegertracing
 DOCKER_TAG?=latest
 
 MOCKERY=mockery
@@ -302,6 +303,35 @@ docker-images-jaeger-backend:
 	docker build -t $(DOCKER_NAMESPACE)/jaeger-opentelemetry-agent:${DOCKER_TAG} -f ${OTEL_COLLECTOR_DIR}/cmd/agent/Dockerfile cmd/opentelemetry/cmd/agent --build-arg ARCH=$(GOARCH)
 	docker build -t $(DOCKER_NAMESPACE)/jaeger-opentelemetry-ingester:${DOCKER_TAG} -f ${OTEL_COLLECTOR_DIR}/cmd/ingester/Dockerfile cmd/opentelemetry/cmd/ingester --build-arg ARCH=$(GOARCH)
 
+docker-build-jaeger-backends: $(addprefix docker-build-jaeger-backend-, $(LINUX_ARCHS))
+docker-build-jaeger-backend-%:
+	for component in agent collector query ingester ; do \
+		docker build -t $(DOCKER_NAMESPACE)/jaeger-$$component:$*-${DOCKER_TAG} cmd/$$component --build-arg ARCH=$* ; \
+		echo "Finished building $$component ==============" ; \
+	done
+	docker build -t $(DOCKER_NAMESPACE)/jaeger-opentelemetry-collector:$*-${DOCKER_TAG} -f ${OTEL_COLLECTOR_DIR}/cmd/collector/Dockerfile cmd/opentelemetry/cmd/collector --build-arg ARCH=$*
+	docker build -t $(DOCKER_NAMESPACE)/jaeger-opentelemetry-agent:$*-${DOCKER_TAG} -f ${OTEL_COLLECTOR_DIR}/cmd/agent/Dockerfile cmd/opentelemetry/cmd/agent --build-arg ARCH=$*
+	docker build -t $(DOCKER_NAMESPACE)/jaeger-opentelemetry-ingester:$*-${DOCKER_TAG} -f ${OTEL_COLLECTOR_DIR}/cmd/ingester/Dockerfile cmd/opentelemetry/cmd/ingester --build-arg ARCH=$*
+
+docker-push-jaeger-backends: $(addprefix docker-push-jaeger-backend-, $(LINUX_ARCHS))
+docker-push-jaeger-backend-%:
+	for component in agent collector query ingester ; do \
+		docker push $(DOCKER_NAMESPACE)/jaeger-$$component:$*-${DOCKER_TAG} ; \
+	done
+
+	docker push $(DOCKER_NAMESPACE)/jaeger-opentelemetry-collector:$*-${DOCKER_TAG}
+	docker push $(DOCKER_NAMESPACE)/jaeger-opentelemetry-agent:$*-${DOCKER_TAG}
+	docker push $(DOCKER_NAMESPACE)/jaeger-opentelemetry-ingester:$*-${DOCKER_TAG}
+
+docker-images-cassandra-allarch:
+docker-images-cassandra-%:
+
+docker-images-elastic-allarch:
+docker-images-elastic-%:
+
+docker-images-tracegen-allarch:
+docker-images-tracegen-%:
+
 .PHONY: docker-images-tracegen
 docker-images-tracegen:
 	docker build -t $(DOCKER_NAMESPACE)/jaeger-tracegen:${DOCKER_TAG} cmd/tracegen/ --build-arg ARCH=$(GOARCH)
@@ -323,22 +353,22 @@ docker-push:
 	done
 
 INSECURE_DOCKER_MANIFEST ?= 0
+IMAGES = jaeger-agent jaeger-collector jaeger-ingester jaeger-query jaeger-opentelemetry-collector jaeger-opentelemetry-agent jaeger-opentelemetry-ingester
 
-docker-manifests: $(addprefix docker-manifest-, ${COMPONENTS})
+docker-manifests: docker-build-jaeger-backends docker-push-jaeger-backends $(addprefix docker-manifest-, ${IMAGES})
 docker-manifest-%:
-	docker manifest create --amend \
-		$(shell if [ "$(INSECURE_DOCKER_MANIFEST)" = "1" ]; then echo "--insecure"; fi) \
-		$(DOCKER_NAMESPACE)/jaeger-$* \
+	docker manifest create --amend $(shell if [ "$(INSECURE_DOCKER_MANIFEST)" = "1" ]; then echo "--insecure"; fi) \
+		$(DOCKER_NAMESPACE)/$*:$(DOCKER_TAG) \
 		$(shell for ARCH in $(LINUX_ARCHS); do \
-				echo $(DOCKER_NAMESPACE)/$*-$$ARCH; \
+				echo $(DOCKER_NAMESPACE)/$*:$$ARCH-$(DOCKER_TAG); \
 			done)
 	
 	for ARCH in $(ARCHS); do \
-		docker manifest annotate $(DOCKER_NAMESPACE)/$* $(DOCKER_NAMESPACE)/$*-$$ARCH --arch $$ARCH ; \
+		docker manifest annotate $(DOCKER_NAMESPACE)/$*:$(DOCKER_TAG) $(DOCKER_NAMESPACE)/$*:$$ARCH-$(DOCKER_TAG) --arch $$ARCH --os linux ; \
 	done
 
 	docker manifest push $(shell if [ "$(INSECURE_DOCKER_MANIFEST)" = "1" ]; then echo "--insecure"; fi) --purge \
-		$(DOCKER_NAMESPACE)/$*
+		$(DOCKER_NAMESPACE)/$*:$(DOCKER_TAG)
 
 .PHONY: build-crossdock-linux
 build-crossdock-linux:
